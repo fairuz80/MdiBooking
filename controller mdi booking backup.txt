@@ -1,0 +1,386 @@
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Models\Ebooking;
+use Illuminate\Http\Request;
+use Auth;
+use App\Models\Role;
+use App\Models\User;
+use Laratrust\Models\LaratrustRole;
+use Carbon\Carbon;
+use PDF;
+
+class EbookinController extends Controller
+{
+    /**
+     * Display a listing of the resource.
+     *
+     * @return \Illuminate\Http\Response
+     */
+    public function __construct()
+    {
+        $this->middleware('auth');
+    }
+        
+     public function index()
+    {
+        $tasks = Ebooking::all();
+        return view('/Booking/indexBooking', ['tasks' => $tasks]);
+    }
+
+    /**
+     * Show the form for creating a new resource.
+     *
+     * @return \Illuminate\Http\Response
+     */
+    public function create()
+    {
+        return view('/Booking/createBooking');
+        
+    }
+
+    /**
+     * Store a newly created resource in storage.
+     *
+     * @param  \Illuminate\Http\Request  $request
+     * @return \Illuminate\Http\Response
+     */
+    public function store(Request $request)
+    {
+        $user = Auth::user();
+        $startDate = Carbon::parse($request['tarikhMula'])->format('d-m-Y');
+        $endDate = Carbon::parse($request['tarikhTamat'])->format('d-m-Y');
+
+        // Check if any existing booking overlaps with the requested date range, location, and session
+        $error = Ebooking::where(function ($query) use ($startDate, $endDate, $request) {
+            $query->where('tarikhMula', '>=', $startDate)
+                ->where('tarikhTamat', '<=', $endDate)
+                ->where('lokasi', '=', $request->lokasi)
+                ->where('ext2', '=', $request->ext2);
+        })->exists();
+
+        if ($error) {
+            return redirect()->back()->with('alert', ' RALAT !! Tiada kekosongan untuk pilihan tarikh waktu atau lokasi');
+        }
+
+        elseif ($request->hasFile('lampiran1')) {
+            $lampiranName = $request->lampiran1->getClientOriginalName();
+            $request->lampiran1->move(public_path('lampiran/'), $lampiranName);
+        }
+
+        // If no overlapping booking, create new bookings for each date within the range
+        for ($date = Carbon::parse($startDate); $date->lte(Carbon::parse($endDate)); $date->addDay()) {
+            $data =  Ebooking::create([
+                'user_id' => auth()->id(),
+                'mesyuarat' => $request['mesyuarat'],
+                'tarikhMula' => $date->toDateString(),
+                'tarikhTamat' => $date->toDateString(),
+                'lokasi' => $request['lokasi'],
+                'ext2' => $request['ext2'],
+                'pengerusi' => $request['pengerusi'],
+                'makanan' => $request['makanan'],
+                'minuman' => $request['minuman'],
+                'bil_ahli' => $request['bil_ahli'],
+                'nama_pemohon' => auth()->user()->name,
+                'bahagian_pemohon' => auth()->user()->bahagian,
+                'jawatan_pemohon' => auth()->user()->jawatan,
+                'email_pemohon' => auth()->user()->email,
+                'ext_pemohon' => auth()->user()->ext,
+                'pengesahan_pemohon' => $request['pengesahan_pemohon'],
+                'tarikh_pemohon' => $request['tarikh_pemohon'],
+                'lampiran1' => $lampiranName,
+                /* 'pengesahan_bkp' => $request['pengesahan_bkp'],
+                'nama_bkp' => $request['nama_bkp'],
+                'tarikh_bkp' => $request['tarikh_bkp'],
+                'catatan_bkp' => $request['catatan_bkp'], */
+            ]);
+        }
+
+        return redirect()->route('list.booking')->with('alert', ' Bilik telah berjaya ditempah');
+    }
+    
+
+    /**
+     * Display the specified resource.
+     *
+     * @param  \App\Models\Ebooking  $ebooking
+     * @return \Illuminate\Http\Response
+     */
+    public function show(Ebooking $ebooking)
+    {
+        $user = Auth::user();
+        
+        switch ($user )  {
+
+        case $user->hasrole ('admin') :
+        
+        $ebookings = Ebooking::all();
+        //$posts = Post::all();
+
+        break;
+
+        case $user->hasrole ('user') :
+        
+            $ebookings = Ebooking::where('user_id', $user->id)
+            ->get();
+            //$posts = Post::all();
+
+        break;
+
+        default :
+
+        break;
+
+        }
+        
+        return view ('/Booking/listBooking', compact('user', 'ebookings'));
+    }
+
+    /**
+     * Show the form for editing the specified resource.
+     *
+     * @param  \App\Models\Ebooking  $ebooking
+     * @return \Illuminate\Http\Response
+     */
+    public function edit($id)
+    {
+        $ebookings = Ebooking::find($id); 
+        return view ('/Booking/editBooking', ['ebookings'=>$ebookings]);
+    }
+
+    /**
+     * Update the specified resource in storage.
+     *
+     * @param  \Illuminate\Http\Request  $request
+     * @param  \App\Models\Ebooking  $ebooking
+     * @return \Illuminate\Http\Response
+     */
+    public function update(Request $request, Ebooking $ebooking)
+    {
+        $user = Auth::user();
+        $startDate = Carbon::parse($request['tarikhMula'])->format('d-m-Y');
+        $endDate = Carbon::parse($request['tarikhTamat'])->format('d-m-Y');
+    
+        // Check if any existing booking overlaps with the requested date range, location, and session
+        $error = Ebooking::where(function ($query) use ($startDate, $endDate, $request, $ebooking) {
+            $query->where('tarikhMula', '>=', $startDate)
+                ->where('tarikhTamat', '<=', $endDate)
+                ->where('lokasi', '=', $request->lokasi)
+                ->where('ext2', '=', $request->ext2);
+        })->exists();
+    
+        if ($error) {
+            return redirect()->back()->with('alert', ' RALAT !! Tarikh, lokasi atau waktu yang dipilih telah ditempah || Tempahan telah mendapat kelulusan BKP');
+        }        
+        
+                
+        // Update the booking details
+        $ebooking = Ebooking::where('id', $request->id)
+        ->update([
+            'user_id' => auth()->id(),
+            'mesyuarat' => $request->mesyuarat,
+            'tarikhMula' => $startDate->toDateString(),
+            'tarikhTamat' => $endDate->toDateString(),
+            'lokasi' => $request->lokasi,
+            'ext2' => $request->ext2,
+            'pengerusi' => $request->pengerusi,
+            'makanan' => $request->makanan,
+            'minuman' => $request->minuman,
+            'bil_ahli' => $request->bil_ahli,
+            'nama_pemohon' => auth()->user()->name,
+            'bahagian_pemohon' => auth()->user()->bahagian,
+            'jawatan_pemohon' => auth()->user()->jawatan,
+            'email_pemohon' => auth()->user()->email,
+            'ext_pemohon' => auth()->user()->ext,
+            'pengesahan_pemohon' => $request->pengesahan_pemohon,
+            'tarikh_pemohon' => $request->tarikh_pemohon,
+            'lampiran1' => $request->lampiran1,
+        ]);
+                
+            
+        return redirect()->route('list.booking')->with('alert', ' Tempahan bilik telah dikemaskini');
+    }
+    
+
+    public function pengesahanBKP($id)
+    {
+        $ebookings = Ebooking::find($id); 
+        return view ('/Booking/pengesahanBKP', ['ebookings'=>$ebookings]);
+    }
+
+    /**
+     * Update the specified resource in storage.
+     *
+     * @param  \Illuminate\Http\Request  $request
+     * @param  \App\Models\Ebooking  $ebooking
+     * @return \Illuminate\Http\Response
+     */
+    public function pengesahanBKP2(Request $request, Ebooking $ebooking)
+    {
+        $user = Auth::user();
+        $startDate = Carbon::parse($request['tarikhMula']);
+        $endDate = Carbon::parse($request['tarikhTamat']);
+    
+        // If no overlapping booking, create new bookings for each date within the range
+            for ($date = $startDate; $date->lte($endDate); $date->addDay()) {
+                Ebooking::where('id', $request->id)
+                ->update([
+                    'user_id' => auth()->id(),
+                    'mesyuarat' => $request->mesyuarat,
+                    'tarikhMula' => $date->toDateString(),
+                    'tarikhTamat' => $date->toDateString(),
+                    'lokasi' => $request->lokasi,
+                    'ext2' => $request->ext2,
+                    'pengerusi' => $request->pengerusi,
+                    'makanan' => $request->makanan,
+                    'minuman' => $request->minuman,
+                    'bil_ahli' => $request->bil_ahli,
+                    'nama_pemohon' => auth()->user()->name,
+                    'bahagian_pemohon' => auth()->user()->bahagian,
+                    'jawatan_pemohon' => auth()->user()->jawatan,
+                    'email_pemohon' => auth()->user()->email,
+                    'ext_pemohon' => auth()->user()->ext,
+                    'pengesahan_pemohon' => $request->pengesahan_pemohon,
+                    'tarikh_pemohon' => $request->tarikh_pemohon,
+                    'pengesahan_bkp' => $request['pengesahan_bkp'],
+                    'nama_bkp' => auth()->user()->name,
+                    'tarikh_bkp' => $request['tarikh_bkp'],
+                    'catatan_bkp' => $request['catatan_bkp'],
+                ]);
+            }
+        
+            return redirect()->route('list.booking')->with('alert', ' Tempahan bilik telah disahkan');
+        
+    }
+
+    /**
+     * Remove the specified resource from storage.
+     *
+     * @param  \App\Models\Ebooking  $ebooking
+     * @return \Illuminate\Http\Response
+     */
+    public function destroy($id)
+    {
+        $ebookings = Ebooking::findOrFail($id);
+        $ebookings->delete();
+        if(\File::exists(public_path('lampiran/'.$ebookings->lampiran1))){
+            \File::delete(public_path('lampiran/'.$ebookings->lampiran1));
+            }
+          
+        return redirect()->back()->with('alert', 'Maklumat tempahan bilik telah dihapuskan');
+    }
+
+    public function searchBooking(Request $request, User $user)
+    {
+        $user = Auth::user();
+        $start_date = $request->input('start_date'); // Format: 'YYYY-MM-DD'
+        $end_date = $request->input('end_date'); // Format: 'YYYY-MM-DD'
+
+        switch ($user) {
+            case $user->hasRole( 'admin') :
+                $tasks = Ebooking::query()
+                ->where(function ($query) use ($start_date, $end_date) {
+                    // Check if "tarikhMula" falls within the date range
+                    $query->where('tarikhMula', '>=', $start_date)
+                          ->where('tarikhTamat', '<=', $end_date);
+            
+                    // OR check if "tarikhTamat" falls within the date range
+                    $query->orWhere('tarikhTamat', '>=', $start_date)
+                          ->where('tarikhMula', '<=', $end_date);
+                })->orderBy('id', 'desc')->get();
+            break;
+
+            case $user->hasRole( 'user') :
+                $tasks = Ebooking::query()->where('user_id', $user->id)
+                ->where(function ($query) use ($start_date, $end_date) {
+                    // Check if "tarikhMula" falls within the date range
+                    $query->where('tarikhMula', '>=', $start_date)
+                          ->where('tarikhTamat', '<=', $end_date);
+            
+                    // OR check if "tarikhTamat" falls within the date range
+                    $query->orWhere('tarikhTamat', '>=', $start_date)
+                          ->where('tarikhMula', '<=', $end_date);
+                })->orderBy('id', 'desc')->get();
+            break;
+                        
+            default :
+    
+            break;
+    
+            }
+            
+            return view('/Booking/searchBooking', compact('user', 'tasks'));
+    }
+
+    public function reportBooking(Request $request, User $user)
+    {
+        $user = Auth::user();
+        $start_dateA = $request->input('start_dateA'); // Format: 'YYYY-MM-DD'
+        $end_dateB = $request->input('end_dateB'); // Format: 'YYYY-MM-DD'
+
+        switch ($user) {
+            case $user->hasRole( 'admin') :
+                $tasks = Ebooking::query()
+                ->where(function ($query) use ($start_dateA, $end_dateB) {
+                    // Check if "tarikhMula" falls within the date range
+                    $query->where('tarikhMula', '>=', $start_dateA)
+                          ->where('tarikhTamat', '<=', $end_dateB);
+            
+                    // OR check if "tarikhTamat" falls within the date range
+                    $query->orWhere('tarikhTamat', '>=', $start_dateA)
+                          ->where('tarikhMula', '<=', $end_dateB);
+                })->orderBy('id', 'desc')->get();
+            break;
+
+            case $user->hasRole( 'user') :
+                $tasks = Ebooking::query()->where('user_id', $user->id)
+                ->where(function ($query) use ($start_dateA, $end_dateB) {
+                    // Check if "tarikhMula" falls within the date range
+                    $query->where('tarikhMula', '>=', $start_dateA)
+                          ->where('tarikhTamat', '<=', $end_dateB);
+            
+                    // OR check if "tarikhTamat" falls within the date range
+                    $query->orWhere('tarikhTamat', '>=', $start_dateA)
+                          ->where('tarikhMula', '<=', $end_dateB);
+                })->orderBy('id', 'desc')->get();
+            break;
+                        
+            default :
+    
+            break;
+    
+            }
+            
+            return view('/Booking/indexBooking', compact('user', 'tasks'));
+    }
+
+    public function calenderBooking()
+    {
+        $user = Auth::user();
+        switch ($user )  {
+
+            case $user->hasrole ('admin') :
+            
+            $tasks = Ebooking::orderBy('id', 'desc')
+            ->get();
+            //$posts = Post::all();
+            
+            break;
+    
+            case $user->hasRole( 'user') :
+            $tasks = Ebooking::where('user_id', $user->id)
+            ->orderBy('id', 'desc')
+            ->get();
+    
+            break;
+    
+            default :
+    
+            break;
+    
+            }
+        
+        return view ('/Booking/calenderBooking', compact('user', 'tasks'));
+    }
+}

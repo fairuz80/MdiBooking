@@ -1,0 +1,1 @@
+<p align=center><img src="{{ asset('/logo/Mdi.png') }}" alt height="20%" width="40%"  ></p>
